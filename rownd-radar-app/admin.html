@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rownd Precision - Harita Yönetici Paneli</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="data.js"></script>
+  <style>
+    body { background-color: #030712; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .glass-card { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    input, select, textarea { background-color: #0b1120 !important; border: 1px solid #1e293b !important; color: #ffffff !important; }
+    input:focus, select:focus, textarea:focus { border-color: #10b981 !important; outline: none !important; }
+  </style>
+</head>
+<body class="p-4 md:p-8 max-w-5xl mx-auto">
+
+  <!-- GÜVENLİK GİRİŞ MODALI -->
+  <div id="auth-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 transition-all duration-300">
+    <div class="glass-card p-8 rounded-3xl max-w-sm w-full border border-emerald-500/40 text-center shadow-2xl">
+      <div class="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mx-auto flex items-center justify-center text-2xl mb-4 shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+        🔒
+      </div>
+      <h2 class="text-lg font-black text-white tracking-wider uppercase mb-1">YÖNETİCİ GİRİŞİ</h2>
+      <p class="text-xs text-slate-400 mb-6">Rownd Precision Operasyon Ağı</p>
+
+      <form id="login-form" onsubmit="event.preventDefault(); handleLogin(event); return false;" class="space-y-4">
+        <div class="relative">
+          <input type="password" id="admin-pass" required placeholder="Yönetici Şifresi" 
+            onkeydown="if(event.key === 'Enter'){ event.preventDefault(); handleLogin(event); }"
+            class="w-full px-4 py-3 rounded-xl text-sm pr-11 text-center font-mono tracking-wider">
+          <button type="button" onclick="togglePassVisibility()" class="absolute right-3 top-3 text-slate-400 hover:text-white text-sm" title="Şifreyi Göster">
+            👁️
+          </button>
+        </div>
+        <p id="auth-error" class="hidden text-xs text-rose-400 font-semibold"></p>
+        <button type="button" onclick="handleLogin(event)" class="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs tracking-wider uppercase transition-all shadow-lg active:scale-95">
+          GİRİŞ YAP ➔
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ANA YÖNETİM PANELİ -->
+  <div id="main-panel" class="hidden space-y-6">
+
+    <header class="glass-card p-5 rounded-2xl flex flex-wrap items-center justify-between gap-4 border-slate-700/60 shadow-xl">
+      <div class="flex items-center gap-3">
+        <div class="w-3 h-3 bg-emerald-400 rounded-full animate-pulse"></div>
+        <div>
+          <h1 class="text-lg font-black tracking-wider text-white uppercase">ROWND PRECISION</h1>
+          <p class="text-xs text-slate-400">Canlı Kiosk & Müşteri Operasyon Paneli</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="mqtt-status" class="px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span> Bağlanıyor...
+        </span>
+        <button onclick="exportDataJs()" class="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 border border-slate-700 transition-colors">
+          📥 data.js İndir
+        </button>
+        <button onclick="handleLogout()" class="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold border border-rose-500/40 transition-colors">
+          Çıkış
+        </button>
+      </div>
+    </header>
+
+    <!-- CANLI DEPOLAMA KULLANIM SAYACI (STORAGE METER) -->
+    <div class="glass-card p-4 rounded-xl border border-slate-800 flex items-center justify-between gap-4">
+      <div class="text-xs text-slate-300 flex items-center gap-2">
+        <span>💾</span> <strong>Tarayıcı Hafıza Kullanımı:</strong>
+        <span id="storage-text" class="text-emerald-400 font-mono font-bold">Hesaplanıyor...</span>
+      </div>
+      <div class="w-48 h-2 rounded-full bg-slate-800 overflow-hidden border border-slate-700">
+        <div id="storage-bar" class="h-full bg-emerald-400 transition-all duration-500" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- MÜŞTERİ FORMU -->
+    <section id="form-section" class="glass-card p-6 rounded-2xl border-emerald-500/30 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-5">
+        <h2 id="form-title" class="text-sm font-black uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+          <span>📍</span> YENİ NOKTA / MÜŞTERİ EKLE
+        </h2>
+        <button id="cancel-edit-btn" onclick="resetForm()" class="hidden text-xs text-rose-400 hover:underline">
+          Düzenlemeyi İptal Et
+        </button>
+      </div>
+
+      <form id="customer-form" onsubmit="handleFormSubmit(event)" class="space-y-4">
+        <input type="hidden" id="edit-id" value="">
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Müşteri / Kurum Adı *</label>
+            <input type="text" id="cust-name" required placeholder="Örn: ASELSAN" class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Harita Etiketi (HUD)</label>
+            <input type="text" id="cust-label" placeholder="Örn: ASELSAN" class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Sektör *</label>
+            <input type="text" id="cust-sector" required placeholder="Örn: Savunma Sanayii & Aviyonik" class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Şehir *</label>
+            <input type="text" id="cust-city" required placeholder="Örn: Ankara" class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Ülke *</label>
+            <input type="text" id="cust-country" required placeholder="Örn: Türkiye" class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+          </div>
+          <div>
+            <button type="button" id="geocode-btn" onclick="autoGeocode()" class="w-full py-2.5 px-3 rounded-xl bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center justify-center gap-1.5 transition-all">
+              <span>🎯</span> Koordinatları Bul
+            </button>
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-300 mb-1">Saat Dilimi</label>
+            <input type="text" id="cust-timezone" value="Europe/Istanbul" class="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-400 mb-1">Enlem (Lat) *</label>
+            <input type="number" step="any" id="cust-lat" required placeholder="39.93" class="w-full px-3.5 py-2 rounded-xl text-xs font-mono">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-400 mb-1">Boylam (Lng) *</label>
+            <input type="number" step="any" id="cust-lng" required placeholder="32.85" class="w-full px-3.5 py-2 rounded-xl text-xs font-mono">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-300 mb-1">Kullanım Amacı / Açıklama *</label>
+          <textarea id="cust-usecase" rows="2" required placeholder="Radar ve elektro-optik sistemler için mikron toleranslı konnektör imalatı..." class="w-full px-3.5 py-2.5 rounded-xl text-xs"></textarea>
+        </div>
+
+        <input type="hidden" id="cust-machine" value="Rownd Precision Lathe">
+
+        <!-- NUMUNE PARÇA VİTRİNİ ("1:1" Kaldırıldı) -->
+        <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+          <div class="text-xs font-bold text-cyan-400 flex items-center gap-2">
+            <span>🔬</span> NUMUNE PARÇA VİTRİNİ
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">Numune Parça Adı</label>
+              <input type="text" id="cust-part-name" placeholder="Örn: Elektro-Optik Konnektör" class="w-full px-3 py-2 rounded-xl text-xs">
+            </div>
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">Malzeme</label>
+              <input type="text" id="cust-part-material" placeholder="Örn: Paslanmaz Çelik (304)" class="w-full px-3 py-2 rounded-xl text-xs">
+            </div>
+            <div>
+              <label class="block text-[11px] text-slate-400 mb-1">Tolerans Hassasiyeti</label>
+              <input type="text" id="cust-part-tolerance" placeholder="Örn: ±0.02 mm (20 µm)" class="w-full px-3 py-2 rounded-xl text-xs">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">Parça Fotoğrafı (Dosya Yükle veya Link Gir)</label>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="cursor-pointer px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200 border border-slate-700 transition-all flex items-center gap-2">
+                <span>📁</span> Fotoğraf Seç
+                <input type="file" id="cust-part-file" accept="image/*" onchange="handleImageUpload(event)" class="hidden">
+              </label>
+              <span class="text-xs text-slate-500">veya URL:</span>
+              <input type="text" id="cust-part-img" placeholder="images/ornek.png" class="flex-1 px-3 py-2 rounded-xl text-xs">
+            </div>
+            <div id="image-preview-box" class="hidden mt-3 p-2 bg-slate-900 rounded-xl border border-slate-800 flex items-center gap-3">
+              <img id="image-preview" src="" alt="Önizleme" class="w-14 h-14 object-contain rounded-lg bg-black border border-slate-700">
+              <div class="text-xs text-slate-400">
+                <span class="text-emerald-400 font-bold block">Görsel Optimize Edildi</span>
+                Kiosk belleği için optimize edilerek hazırlandı.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 pt-2">
+          <input type="checkbox" id="cust-active" checked class="w-4 h-4 rounded text-emerald-500 focus:ring-0 cursor-pointer">
+          <label for="cust-active" class="text-xs text-slate-300 font-semibold cursor-pointer">
+            <strong class="text-emerald-400">TV Otomatik Turunda Göster (Aktif)</strong>
+            <span class="text-slate-400 block text-[11px]">İşareti kaldırırsanız firma veritabanında kalır ancak TV döngüsünde atlanır.</span>
+          </label>
+        </div>
+
+        <div class="flex items-center gap-2 pt-1">
+          <input type="checkbox" id="trigger-alert" checked class="w-4 h-4 rounded text-emerald-500 focus:ring-0 cursor-pointer">
+          <label for="trigger-alert" class="text-xs text-slate-300 font-semibold cursor-pointer">
+            Kaydederken TV'de <strong class="text-emerald-400">"Yeni Teslimat / Satış"</strong> patlama bildirimini hemen oynat!
+          </label>
+        </div>
+
+        <button type="submit" id="submit-btn" class="w-full mt-4 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-sm tracking-wider uppercase transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] active:scale-[0.99]">
+          HARİTAYA EKLE VE TV'YE GÖNDER 🚀
+        </button>
+      </form>
+    </section>
+
+    <!-- MEVCUT MÜŞTERİLER LİSTESİ -->
+    <section class="glass-card p-6 rounded-2xl border border-slate-700/80 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+        <h2 class="text-sm font-black uppercase tracking-wider text-cyan-400 flex items-center gap-2">
+          <span>🌍</span> AKTİF REFERANSLAR VE GÖSTERİM SIRASI (<span id="total-count">0</span>)
+        </h2>
+        <button onclick="resetToDefaults()" class="text-[11px] text-slate-400 hover:text-amber-400 transition-colors">
+          Fabrika Ayarlarına Dön
+        </button>
+      </div>
+
+      <div class="mb-4">
+        <input type="text" id="search-input" oninput="filterLocations(this.value)" placeholder="Kurum, şehir veya sektör ara..." class="w-full px-3.5 py-2.5 rounded-xl text-xs">
+      </div>
+
+      <div id="admin-locations-list" class="space-y-2.5"></div>
+    </section>
+  </div>
+
+  <script>
+    const ADMIN_PASSWORD = "RowndPrecision";
+
+    function checkAuth() {
+      const isAuth = sessionStorage.getItem('rownd_admin_auth') === 'true' || localStorage.getItem('rownd_admin_auth') === 'true';
+      if (isAuth) {
+        document.getElementById('auth-modal').classList.add('hidden');
+        document.getElementById('main-panel').classList.remove('hidden');
+        updateStorageMeter();
+      } else {
+        document.getElementById('auth-modal').classList.remove('hidden');
+        document.getElementById('main-panel').classList.add('hidden');
+        setTimeout(() => {
+          const inp = document.getElementById('admin-pass');
+          if (inp) inp.focus();
+        }, 100);
+      }
+    }
+
+    function handleLogin(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      const input = document.getElementById('admin-pass');
+      if (!input) return false;
+
+      const raw = input.value.trim();
+      const normalized = raw.replace(/\s+/g, '').toLowerCase().replace(/ı/g, 'i');
+      const targetNormalized = ADMIN_PASSWORD.toLowerCase().replace(/ı/g, 'i');
+      const errEl = document.getElementById('auth-error');
+
+      if (normalized === targetNormalized || raw === ADMIN_PASSWORD) {
+        sessionStorage.setItem('rownd_admin_auth', 'true');
+        localStorage.setItem('rownd_admin_auth', 'true');
+        if (errEl) errEl.classList.add('hidden');
+        checkAuth();
+        return false;
+      } else {
+        if (errEl) {
+          errEl.innerText = "Hatalı şifre! (Büyük/küçük harfe dikkat edin)";
+          errEl.classList.remove('hidden');
+        }
+        input.value = "";
+        input.focus();
+        return false;
+      }
+    }
+
+    function handleLogout() {
+      sessionStorage.removeItem('rownd_admin_auth');
+      localStorage.removeItem('rownd_admin_auth');
+      checkAuth();
+    }
+
+    function togglePassVisibility() {
+      const p = document.getElementById('admin-pass');
+      if (p) p.type = p.type === 'password' ? 'text' : 'password';
+    }
+
+    checkAuth();
+
+    // =================================================================
+    // LOCALSTORAGE & MQTT MOTORU
+    // =================================================================
+    const STORAGE_KEY = 'rownd_custom_locations';
+    const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+    const MQTT_SYNC_TOPIC = 'rownd/kiosk/admin_sync';
+    const MQTT_CONTROL_TOPIC = 'rownd/kiosk/control';
+
+    let locations = [];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        locations = JSON.parse(saved);
+      } else if (typeof SALES_LOCATIONS !== 'undefined') {
+        locations = [...SALES_LOCATIONS];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(locations));
+      }
+    } catch (e) {
+      locations = typeof SALES_LOCATIONS !== 'undefined' ? [...SALES_LOCATIONS] : [];
+    }
+
+    let client = null;
+    try {
+      client = mqtt.connect(MQTT_BROKER, { keepalive: 30, reconnectPeriod: 3000 });
+      client.on('connect', () => {
+        document.getElementById('mqtt-status').className = "px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5";
+        document.getElementById('mqtt-status').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span> TV Senkronize`;
+        
+        client.publish(MQTT_SYNC_TOPIC, JSON.stringify({
+          action: 'LOCATIONS_SYNC',
+          locations: locations
+        }), { retain: true, qos: 1 });
+      });
+
+      client.on('offline', () => {
+        document.getElementById('mqtt-status').className = "px-3 py-1 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1.5";
+        document.getElementById('mqtt-status').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> Çevrimdışı (Lokal Kayıt)`;
+      });
+    } catch (e) {
+      console.warn('MQTT Bağlantı Hatası:', e);
+    }
+
+    function updateStorageMeter() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY) || '';
+        const bytes = new Blob([raw]).size;
+        const mb = (bytes / (1024 * 1024)).toFixed(2);
+        const percent = Math.min(100, Math.round((bytes / (5 * 1024 * 1024)) * 100));
+
+        const bar = document.getElementById('storage-bar');
+        const txt = document.getElementById('storage-text');
+        if (bar && txt) {
+          bar.style.width = `${percent}%`;
+          if (percent > 80) bar.className = "h-full bg-rose-500 transition-all duration-500";
+          else if (percent > 50) bar.className = "h-full bg-amber-400 transition-all duration-500";
+          else bar.className = "h-full bg-emerald-400 transition-all duration-500";
+
+          txt.innerText = `${mb} MB / 5.0 MB (%${percent})`;
+        }
+      } catch(e) {}
+    }
+
+    function safeSaveToLocalStorage(data) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        updateStorageMeter();
+        return true;
+      } catch (e) {
+        if (e.name === 'QuotaExceededError' || e.code === 22) {
+          alert('Tarayıcı depolama alanı doldu! Lütfen yeni parçaları dosya olarak değil, images klasöründeki URL olarak ekleyin.');
+        } else {
+          alert('Veri kaydedilirken depolama hatası oluştu: ' + e.message);
+        }
+        return false;
+      }
+    }
+
+    function broadcastSync(newSaleTarget = null) {
+      safeSaveToLocalStorage(locations);
+      renderList();
+
+      if (client && client.connected) {
+        const payload = {
+          action: 'LOCATIONS_SYNC',
+          locations: locations,
+          newSale: newSaleTarget
+        };
+        client.publish(MQTT_SYNC_TOPIC, JSON.stringify(payload), { retain: true, qos: 1 });
+      }
+    }
+
+    async function autoGeocode() {
+      const city = document.getElementById('cust-city').value.trim();
+      const btn = document.getElementById('geocode-btn');
+      if (!city) {
+        alert("Lütfen önce bir şehir adı girin!");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = `<span>⏳</span> Aranıyor...`;
+
+      try {
+        const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=tr&format=json`);
+        const data = await res.json();
+        if (data.results && data.results.length > 0) {
+          const r = data.results[0];
+          document.getElementById('cust-lat').value = r.latitude.toFixed(4);
+          document.getElementById('cust-lng').value = r.longitude.toFixed(4);
+          if (r.country) document.getElementById('cust-country').value = r.country;
+          if (r.timezone) document.getElementById('cust-timezone').value = r.timezone;
+        } else {
+          alert(`"${city}" koordinatları bulunamadı. Lütfen manuel giriniz.`);
+        }
+      } catch (e) {
+        alert("Konum servisine erişilemedi. Lütfen koordinatları manuel girin.");
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span>🎯</span> Koordinatları Bul`;
+      }
+    }
+
+    let uploadedBase64Image = null;
+
+    function handleImageUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      if (file.size > 5 * 1024 * 1024) {
+        alert("Görsel boyutu 5 MB'dan küçük olmalıdır!");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 600;
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          uploadedBase64Image = canvas.toDataURL('image/jpeg', 0.75);
+          document.getElementById('image-preview').src = uploadedBase64Image;
+          document.getElementById('image-preview-box').classList.remove('hidden');
+          document.getElementById('cust-part-img').value = "";
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function handleFormSubmit(e) {
+      e.preventDefault();
+
+      const editId = document.getElementById('edit-id').value;
+      const customer = document.getElementById('cust-name').value.trim();
+      const displayLabel = document.getElementById('cust-label').value.trim() || customer;
+      const sector = document.getElementById('cust-sector').value.trim();
+      const city = document.getElementById('cust-city').value.trim();
+      const country = document.getElementById('cust-country').value.trim();
+      const lat = parseFloat(document.getElementById('cust-lat').value);
+      const lng = parseFloat(document.getElementById('cust-lng').value);
+      const timezone = document.getElementById('cust-timezone').value.trim() || "Europe/Istanbul";
+      const machine = document.getElementById('cust-machine').value.trim();
+      const useCase = document.getElementById('cust-usecase').value.trim();
+
+      const partName = document.getElementById('cust-part-name').value.trim();
+      const partMaterial = document.getElementById('cust-part-material').value.trim();
+      const partTolerance = document.getElementById('cust-part-tolerance').value.trim();
+      const partImage = uploadedBase64Image || document.getElementById('cust-part-img').value.trim() || null;
+      const triggerAlert = document.getElementById('trigger-alert').checked;
+      const isActive = document.getElementById('cust-active').checked;
+
+      const newLocation = {
+        id: editId || ("loc-" + Date.now().toString(36)),
+        city,
+        displayLabel,
+        country,
+        lat,
+        lng,
+        zoomAltitude: country.toLowerCase().includes("türki") ? 0.38 : 0.95,
+        timezone,
+        sector,
+        customer,
+        useCase,
+        machine,
+        partName,
+        partMaterial,
+        partTolerance,
+        partImage,
+        active: isActive
+      };
+
+      if (editId) {
+        const index = locations.findIndex(loc => loc.id === editId);
+        if (index !== -1) locations[index] = newLocation;
+        broadcastSync(triggerAlert ? newLocation : null);
+        alert(`"${customer}" başarıyla güncellendi!`);
+      } else {
+        locations.unshift(newLocation);
+        broadcastSync(triggerAlert ? newLocation : null);
+        alert(`🎉 "${customer}" (${country}) haritaya eklendi ve TV'ye aktarıldı!`);
+      }
+
+      resetForm();
+    }
+
+    function resetForm() {
+      document.getElementById('customer-form').reset();
+      document.getElementById('edit-id').value = "";
+      document.getElementById('cust-active').checked = true;
+      document.getElementById('cust-machine').value = "Rownd Precision Lathe";
+      document.getElementById('form-title').innerHTML = `<span>📍</span> YENİ NOKTA / MÜŞTERİ EKLE`;
+      document.getElementById('submit-btn').innerText = `HARİTAYA EKLE VE TV'YE GÖNDER 🚀`;
+      document.getElementById('cancel-edit-btn').classList.add('hidden');
+      document.getElementById('image-preview-box').classList.add('hidden');
+      uploadedBase64Image = null;
+    }
+
+    function editLocation(id) {
+      const loc = locations.find(l => l.id === id);
+      if (!loc) return;
+
+      document.getElementById('edit-id').value = loc.id;
+      document.getElementById('cust-name').value = loc.customer;
+      document.getElementById('cust-label').value = loc.displayLabel || loc.customer;
+      document.getElementById('cust-city').value = loc.city;
+      document.getElementById('cust-country').value = loc.country;
+      document.getElementById('cust-lat').value = loc.lat;
+      document.getElementById('cust-lng').value = loc.lng;
+      document.getElementById('cust-timezone').value = loc.timezone || "Europe/Istanbul";
+      document.getElementById('cust-sector').value = loc.sector;
+      document.getElementById('cust-machine').value = loc.machine;
+      document.getElementById('cust-usecase').value = loc.useCase;
+      document.getElementById('cust-active').checked = (loc.active !== false);
+
+      document.getElementById('cust-part-name').value = loc.partName || "";
+      document.getElementById('cust-part-material').value = loc.partMaterial || "";
+      document.getElementById('cust-part-tolerance').value = loc.partTolerance || "";
+      
+      if (loc.partImage && loc.partImage.startsWith('data:image')) {
+        uploadedBase64Image = loc.partImage;
+        document.getElementById('cust-part-img').value = "";
+        document.getElementById('image-preview').src = loc.partImage;
+        document.getElementById('image-preview-box').classList.remove('hidden');
+      } else {
+        uploadedBase64Image = null;
+        document.getElementById('cust-part-img').value = loc.partImage || "";
+        if (loc.partImage) {
+          document.getElementById('image-preview').src = loc.partImage;
+          document.getElementById('image-preview-box').classList.remove('hidden');
+        } else {
+          document.getElementById('image-preview-box').classList.add('hidden');
+        }
+      }
+
+      document.getElementById('form-title').innerHTML = `<span>✏️</span> MÜŞTERİ DÜZENLE: ${loc.customer}`;
+      document.getElementById('submit-btn').innerText = `GÜNCELLEMEYİ KAYDET VE TV'YE YANSIT 💾`;
+      document.getElementById('cancel-edit-btn').classList.remove('hidden');
+
+      scrollToForm();
+    }
+
+    function deleteLocation(id) {
+      const loc = locations.find(l => l.id === id);
+      if (!loc) return;
+
+      if (confirm(`"${loc.customer}" referansını silmek istediğinize emin misiniz?`)) {
+        locations = locations.filter(l => l.id !== id);
+        broadcastSync(null);
+      }
+    }
+
+    function focusOnTv(id) {
+      if (client && client.connected) {
+        const payload = JSON.stringify({ action: 'FOCUS_LOCATION', targetId: id });
+        client.publish(MQTT_CONTROL_TOPIC, payload);
+        client.publish(MQTT_SYNC_TOPIC, payload);
+      } else {
+        alert("TV ile canlı MQTT bağlantısı kurulamadı. TV ekranı açık mı?");
+      }
+    }
+
+    function scrollToForm() {
+      document.getElementById('form-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function moveLocation(index, direction) {
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= locations.length) return;
+      const temp = locations[index];
+      locations[index] = locations[newIndex];
+      locations[newIndex] = temp;
+      broadcastSync();
+    }
+
+    function toggleLocationActive(id) {
+      const loc = locations.find(l => l.id === id);
+      if (!loc) return;
+      loc.active = (loc.active === false) ? true : false;
+      broadcastSync();
+    }
+
+    function renderList(filtered = null) {
+      const list = filtered || locations;
+      const container = document.getElementById('admin-locations-list');
+      document.getElementById('total-count').innerText = locations.length;
+      container.innerHTML = '';
+
+      if (list.length === 0) {
+        container.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">Kayıtlı lokasyon bulunamadı.</div>`;
+        return;
+      }
+
+      list.forEach((loc, index) => {
+        const item = document.createElement('div');
+        const isLocActive = loc.active !== false;
+        item.className = `p-3 rounded-xl bg-slate-900/80 border ${isLocActive ? 'border-slate-800' : 'border-slate-800/50 opacity-60'} flex items-center justify-between gap-3 hover:border-slate-700 transition-all`;
+
+        item.innerHTML = `
+          <div class="flex items-center gap-1.5 shrink-0">
+            <div class="flex flex-col gap-0.5">
+              <button onclick="moveLocation(${index}, -1)" ${index === 0 ? 'disabled' : ''} title="Yukarı Taşı" class="w-6 h-5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-20 disabled:pointer-events-none text-[10px] text-slate-300 flex items-center justify-center font-bold active:scale-95">▲</button>
+              <button onclick="moveLocation(${index}, 1)" ${index === locations.length - 1 ? 'disabled' : ''} title="Aşağı Taşı" class="w-6 h-5 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-20 disabled:pointer-events-none text-[10px] text-slate-300 flex items-center justify-center font-bold active:scale-95">▼</button>
+            </div>
+            <span class="w-6 text-center text-xs font-mono font-bold text-slate-400">#${index + 1}</span>
+          </div>
+
+          <div class="flex items-center gap-2 shrink-0" title="TV Turunda Göster / Gizle">
+            <input type="checkbox" onchange="toggleLocationActive('${loc.id}')" ${isLocActive ? 'checked' : ''} class="w-4 h-4 rounded text-emerald-500 focus:ring-0 cursor-pointer">
+          </div>
+
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="w-2 h-2 rounded-full ${loc.country === 'Türkiye' ? 'bg-cyan-400' : 'bg-emerald-400'}"></span>
+              <span class="text-xs font-black text-white truncate">${loc.customer}</span>
+              <span class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">${loc.city}, ${loc.country}</span>
+              ${!isLocActive ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">Turda Gizli</span>' : ''}
+            </div>
+            <p class="text-[11px] text-slate-400 truncate mt-0.5">${loc.sector} • <span class="text-slate-500">${loc.useCase}</span></p>
+          </div>
+
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button onclick="focusOnTv('${loc.id}')" title="TV'de Odaklan" class="px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/20 active:scale-95 transition-all">
+              TV'de Göster
+            </button>
+            <button onclick="editLocation('${loc.id}')" title="Düzenle" class="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 active:scale-95 transition-all">
+              ✏️
+            </button>
+            <button onclick="deleteLocation('${loc.id}')" title="Sil" class="p-1.5 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 active:scale-95 transition-all">
+              🗑️
+            </button>
+          </div>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    function filterLocations(query) {
+      const q = query.toLowerCase().trim();
+      if (!q) { renderList(); return; }
+      renderList(locations.filter(l => 
+        l.customer.toLowerCase().includes(q) || 
+        l.city.toLowerCase().includes(q) || 
+        l.country.toLowerCase().includes(q) ||
+        l.sector.toLowerCase().includes(q)
+      ));
+    }
+
+    function resetToDefaults() {
+      if (confirm("Listeyi 21 referanslık orijinal ayarlara sıfırlamak istiyor musunuz? Özel eklediğiniz kayıtlar silinecektir.")) {
+        if (typeof SALES_LOCATIONS !== 'undefined') {
+          locations = [...SALES_LOCATIONS];
+          broadcastSync(null);
+          alert("Fabrika ayarlarına dönüldü.");
+        }
+      }
+    }
+
+    function exportDataJs() {
+      const content = `// =================================================================
+// ROWND PRECISION - GÜNCEL MÜŞTERİ VERİTABANI
+// Güncellenme Tarihi: ${new Date().toLocaleString('tr-TR')}
+// =================================================================
+
+const HQ_LOCATION = ${JSON.stringify(HQ_LOCATION, null, 2)};
+
+const SALES_LOCATIONS = ${JSON.stringify(locations, null, 2)};
+`;
+      const blob = new Blob([content], { type: 'text/javascript;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'data.js';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    renderList();
+  </script>
+</body>
+</html>

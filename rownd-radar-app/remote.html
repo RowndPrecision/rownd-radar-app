@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Rownd Precision - Kumanda Paneli</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="data.js"></script>
+  <style>
+    body { 
+      background-color: #030712; 
+      color: #f8fafc; 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .glass-card { 
+      background: rgba(15, 23, 42, 0.75); 
+      backdrop-filter: blur(12px); 
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.1); 
+    }
+  </style>
+</head>
+<body class="p-4 pb-12 max-w-md mx-auto relative">
+
+  <header class="glass-card p-4 rounded-2xl mb-4 flex items-center justify-between shadow-lg">
+    <div>
+      <div class="flex items-center gap-1.5">
+        <h1 class="text-base font-black tracking-wider text-emerald-400">ROWND PRECISION</h1>
+      </div>
+      <p id="session-label" class="text-[11px] text-slate-400 font-mono">Oturum: Bağlanıyor...</p>
+    </div>
+    <div id="conn-badge" class="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1.5">
+      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+      Bağlanıyor...
+    </div>
+  </header>
+
+  <!-- HIZLI KONTROL BUTONLARI -->
+  <div class="grid grid-cols-3 gap-2.5 mb-4">
+    <button onclick="sendCommand('RESUME_TOUR')" class="glass-card p-3 rounded-xl text-center active:scale-95 transition-transform border-emerald-500/30 flex flex-col items-center justify-center gap-1 hover:border-emerald-500/60">
+      <span class="text-lg">▶️</span>
+      <span class="text-xs font-bold text-slate-200">Otomatik Tur</span>
+    </button>
+    <button onclick="sendCommand('SHOWREEL')" class="glass-card p-3 rounded-xl text-center active:scale-95 transition-transform border-cyan-500/30 flex flex-col items-center justify-center gap-1 hover:border-cyan-500/60">
+      <span class="text-lg">🎬</span>
+      <span class="text-xs font-bold text-slate-200">Showreel</span>
+    </button>
+    <button onclick="sendCommand('RESET_VIEW')" class="glass-card p-3 rounded-xl text-center active:scale-95 transition-transform border-indigo-500/30 flex flex-col items-center justify-center gap-1 hover:border-indigo-500/60">
+      <span class="text-lg">🔄</span>
+      <span class="text-xs font-bold text-slate-200">Kamera Sıfırla</span>
+    </button>
+  </div>
+
+  <!-- FİLTRELER VE LİSTE BAŞLIĞI -->
+  <div class="mb-3 space-y-2">
+    <div class="flex items-center justify-between px-1">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">HEDEFE ODAKLAN (TV'DE GÖSTER)</h2>
+      <span id="loc-count" class="text-[10px] text-slate-500 font-mono">0 Nokta</span>
+    </div>
+
+    <div class="flex gap-1.5 overflow-x-auto pb-1 text-[11px]">
+      <button onclick="filterRegion('all')" class="region-filter-btn px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-bold whitespace-nowrap shadow-sm" data-region="all">Hepsi</button>
+      <button onclick="filterRegion('Türkiye')" class="region-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium whitespace-nowrap hover:bg-slate-700" data-region="Türkiye">Türkiye</button>
+      <button onclick="filterRegion('Avrupa')" class="region-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium whitespace-nowrap hover:bg-slate-700" data-region="Avrupa">Avrupa</button>
+      <button onclick="filterRegion('ABD')" class="region-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium whitespace-nowrap hover:bg-slate-700" data-region="ABD">Amerika</button>
+      <button onclick="filterRegion('Asya')" class="region-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium whitespace-nowrap hover:bg-slate-700" data-region="Asya">Asya</button>
+    </div>
+  </div>
+  
+  <!-- LOKASYON LİSTESİ -->
+  <div id="locations-list" class="space-y-2"></div>
+
+  <!-- ANLIK GERİ BİLDİRİM TOAST BİLDİRİMİ -->
+  <div id="remote-toast" class="fixed bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 text-xs font-black shadow-2xl opacity-0 pointer-events-none transition-all duration-300 flex items-center gap-1.5">
+    <span>✓</span> TV'ye Yansıtıldı
+  </div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionId = urlParams.get('session') || 'kiosk_main';
+
+    document.getElementById('session-label').innerText = `Oturum: ${sessionId}`;
+    const badge = document.getElementById('conn-badge');
+
+    const STORAGE_KEY = 'rownd_custom_locations';
+    let locations = [];
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        locations = JSON.parse(saved);
+      } else {
+        locations = typeof SALES_LOCATIONS !== 'undefined' ? [...SALES_LOCATIONS] : [];
+      }
+    } catch(e) {
+      locations = typeof SALES_LOCATIONS !== 'undefined' ? [...SALES_LOCATIONS] : [];
+    }
+
+    let currentFilter = 'all';
+
+    const MQTT_BROKER = 'wss://broker.emqx.io:8084/mqtt';
+    const MQTT_SESSION_TOPIC = `rownd/kiosk/${sessionId}`;
+    const MQTT_GLOBAL_CONTROL = 'rownd/kiosk/control';
+    const MQTT_ADMIN_TOPIC = 'rownd/kiosk/admin_sync';
+
+    let client = null;
+    try {
+      client = mqtt.connect(MQTT_BROKER, {
+        clientId: 'remote_' + Math.random().toString(16).substring(2, 8),
+        keepalive: 30,
+        reconnectPeriod: 2500
+      });
+
+      client.on('connect', () => {
+        client.subscribe([MQTT_ADMIN_TOPIC, MQTT_SESSION_TOPIC], { qos: 1 });
+
+        if (badge) {
+          badge.className = "px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1.5";
+          badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> TV'ye Bağlandı`;
+        }
+      });
+
+      client.on('message', (topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+          if (data.action === 'LOCATIONS_SYNC' && Array.isArray(data.locations)) {
+            locations = [...data.locations];
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(locations));
+            } catch(e) {}
+            renderLocations(currentFilter);
+          }
+        } catch (e) {}
+      });
+
+      client.on('reconnect', () => {
+        if (badge) {
+          badge.className = "px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1.5";
+          badge.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span> Tekrar Bağlanıyor...`;
+        }
+      });
+
+      client.on('offline', () => {
+        if (badge) {
+          badge.className = "px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold";
+          badge.innerText = "Bağlantı Kesildi";
+        }
+      });
+    } catch (e) {
+      console.error('MQTT Hatası:', e);
+    }
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === STORAGE_KEY && e.newValue) {
+        try {
+          locations = JSON.parse(e.newValue);
+          renderLocations(currentFilter);
+        } catch (err) {}
+      }
+    });
+
+    let toastTimer = null;
+    function showToast(text = "TV'ye Yansıtıldı") {
+      const toast = document.getElementById('remote-toast');
+      if (!toast) return;
+      toast.innerHTML = `<span>✓</span> ${text}`;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 1600);
+    }
+
+    function sendCommand(action, targetId = null) {
+      if (navigator.vibrate) navigator.vibrate(35);
+
+      if (!client || !client.connected) {
+        alert("TV bağlantısı henüz kurulamadı. Lütfen birkaç saniye bekleyin.");
+        return;
+      }
+
+      const payload = JSON.stringify({ action, targetId, session: sessionId });
+      client.publish(MQTT_SESSION_TOPIC, payload);
+      client.publish(MQTT_GLOBAL_CONTROL, payload);
+
+      showToast(action === 'RESUME_TOUR' ? 'Otomatik Tur Başlatıldı' : (action === 'SHOWREEL' ? 'Showreel Başlatıldı' : 'TV Odaklandı'));
+    }
+
+    const listContainer = document.getElementById('locations-list');
+
+    function renderLocations(filter = 'all') {
+      currentFilter = filter;
+      listContainer.innerHTML = '';
+
+      const filtered = locations.filter(loc => {
+        if (filter === 'all') return true;
+        const c = (loc.country || '').toLowerCase();
+        if (filter === 'Türkiye') return c.includes('türk');
+        if (filter === 'ABD') return ['abd', 'usa', 'united states', 'amerika'].some(s => c.includes(s));
+        if (filter === 'Avrupa') {
+          const euList = ["italya", "belçika", "belgium", "ingiltere", "united kingdom", "uk", "fransa", "france", "almanya", "germany", "hollanda", "netherlands", "isviçre", "switzerland", "avusturya", "austria", "polonya", "poland", "ispanya", "spain", "isveç", "sweden", "norveç", "norway", "danimarka", "denmark", "finlandiya", "finland", "irlanda", "ireland", "portekiz", "portugal", "çekya", "czech", "macaristan", "hungary", "romanya", "romania", "yunanistan", "greece"];
+          return euList.some(s => c.includes(s));
+        }
+        if (filter === 'Asya') {
+          const asiaList = ["japonya", "japan", "hong kong", "filipinler", "philippines", "singapur", "singapore", "güney kore", "south korea", "avustralya", "australia"];
+          return asiaList.some(s => c.includes(s));
+        }
+        return true;
+      });
+
+      document.getElementById('loc-count').innerText = `${filtered.length} Nokta`;
+
+      if (filtered.length === 0) {
+        listContainer.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">Bu bölgede kayıtlı nokta bulunamadı.</div>`;
+        return;
+      }
+
+      filtered.forEach(loc => {
+        const btn = document.createElement('button');
+        btn.className = "w-full glass-card p-3 rounded-xl flex items-center justify-between text-left active:border-emerald-400 active:scale-[0.98] transition-all hover:border-slate-600";
+        btn.onclick = () => sendCommand('FOCUS_LOCATION', loc.id);
+
+        btn.innerHTML = `
+          <div class="pr-2 min-w-0">
+            <div class="text-xs font-bold text-white truncate">${loc.customer}</div>
+            <div class="text-[10px] text-slate-400 truncate">${loc.city}, ${loc.country} • <span class="text-cyan-400">${loc.sector}</span></div>
+          </div>
+          <div class="text-emerald-400 text-xs font-mono font-bold shrink-0">GÖSTER ➔</div>
+        `;
+        listContainer.appendChild(btn);
+      });
+    }
+
+    function filterRegion(region) {
+      document.querySelectorAll('.region-filter-btn').forEach(btn => {
+        if (btn.dataset.region === region) {
+          btn.className = "region-filter-btn px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 font-bold whitespace-nowrap shadow-sm";
+        } else {
+          btn.className = "region-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 font-medium whitespace-nowrap hover:bg-slate-700";
+        }
+      });
+      renderLocations(region);
+    }
+
+    renderLocations('all');
+  </script>
+</body>
+</html>

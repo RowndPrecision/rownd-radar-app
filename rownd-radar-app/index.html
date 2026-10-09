@@ -1,0 +1,230 @@
+﻿<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rownd Precision - Canlı Küresel Operasyon Ağı</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- ThreeJS ve GlobeGL -->
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/globe.gl@2.32.1/dist/globe.gl.min.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <!-- MQTT ve QR Kod Kütüphaneleri -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #030712;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+      transition: cursor 0.3s ease;
+    }
+    body.hide-cursor {
+      cursor: none;
+    }
+    .glass-panel {
+      background: rgba(9, 14, 28, 0.96);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+    }
+  </style>
+</head>
+<body class="text-slate-100 bg-[#030712] relative w-screen h-screen overflow-hidden">
+
+  <!-- 1. ARKA PLAN 3D DÜNYA KÜRESİ -->
+  <div id="globeViz" class="fixed inset-0 w-full h-full z-0 pointer-events-auto"></div>
+
+  <!-- 2. ÜST HUD HEADER -->
+  <header class="fixed top-6 left-8 right-8 z-20 flex justify-between items-center pointer-events-none">
+    <div class="glass-panel px-6 py-3.5 rounded-2xl flex items-center gap-4 pointer-events-auto">
+      <div class="w-3 h-3 bg-emerald-400 rounded-full animate-ping"></div>
+      <div>
+        <h1 class="text-lg font-black tracking-widest text-white uppercase">ROWND PRECISION</h1>
+        <p class="text-[11px] text-slate-400 tracking-wider">CANLI KÜRESEL OPERASYON AĞI</p>
+      </div>
+      <div id="kiosk-mode-badge" class="ml-2 px-3 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold tracking-wider flex items-center gap-1.5">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        OTOMATİK TUR
+      </div>
+    </div>
+
+    <div class="glass-panel px-6 py-3.5 rounded-2xl flex items-center gap-6 pointer-events-auto">
+      <div class="text-right">
+        <div class="text-[11px] text-slate-400 uppercase font-bold tracking-wider">BURSA NİLÜFER</div>
+        <div id="hq-clock" class="text-sm font-mono font-bold text-emerald-400">--:--:--</div>
+      </div>
+      <div class="h-7 w-[1px] bg-slate-700"></div>
+      <div class="text-right">
+        <div class="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">AKTİF MAKİNE</div>
+        <div id="active-count" class="text-sm font-mono font-bold text-white">200+</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- 3. SOL ALT: BİLGİ VE NUMUNE VİTRİN KARTI -->
+  <div id="info-card" class="glass-panel fixed bottom-8 left-8 z-20 max-w-[880px] p-7 rounded-3xl transition-all duration-500 opacity-0 transform translate-y-6 pointer-events-none flex gap-6 items-stretch shadow-2xl overflow-hidden">
+    <div id="card-progress-bar" class="absolute top-0 left-0 h-[2.5px] bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400 w-0"></div>
+
+    <div class="flex-1 flex flex-col justify-between min-w-[340px] max-w-[420px]">
+      <div>
+        <div class="flex items-center justify-between mb-3 border-b border-slate-700/70 pb-2.5">
+          <span id="card-country" class="text-sm uppercase font-black tracking-widest text-emerald-400">TÜRKİYE</span>
+          <span id="card-time" class="text-sm font-mono font-bold text-slate-200">--:-- (Yerel)</span>
+        </div>
+        
+        <h2 id="card-city" class="text-3xl font-black text-white tracking-tight mb-1.5 leading-tight">Kurum Adı</h2>
+        <div id="card-customer" class="text-sm font-bold text-cyan-400 mb-4">Şehir • Sektör</div>
+        
+        <p class="text-xs text-slate-400 uppercase tracking-wider mb-1.5 font-bold">KULLANIM AMACI:</p>
+        <p id="card-usecase" class="text-sm text-slate-100 leading-relaxed mb-5 font-normal">Açıklama yükleniyor...</p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 pt-3.5 border-t border-slate-700/70 text-xs mt-auto">
+        <div>
+          <span class="text-slate-400 block text-xs font-semibold mb-0.5">CİHAZ</span>
+          <span id="card-machine" class="font-bold text-slate-100 text-sm">Rownd Precision Lathe</span>
+        </div>
+        <div class="text-right">
+          <span class="text-slate-400 block text-xs font-semibold mb-0.5">HAVA DURUMU</span>
+          <span id="card-weather" class="font-bold text-emerald-300 font-mono text-sm">Yükleniyor...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Numune Parça Vitrini (Siyah Arka Plan) -->
+    <div id="card-part-box" class="hidden w-[340px] p-5 rounded-2xl bg-slate-900/90 border border-emerald-500/40 flex-col justify-between shadow-2xl overflow-hidden">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="text-xs font-black uppercase tracking-wider text-emerald-400">NUMUNE PARÇA</span>
+        </div>
+        <span class="text-[10px] font-mono text-slate-400 font-bold">CNC CAD</span>
+      </div>
+
+      <div class="w-full h-48 rounded-xl bg-black flex items-center justify-center p-3 relative border border-slate-800/80 shadow-inner my-auto overflow-hidden">
+        <img id="card-part-img" src="" alt="Parça" class="w-full h-full object-contain relative z-10 transition-opacity duration-300 opacity-0">
+      </div>
+
+      <div class="border-t border-slate-800 pt-3 mt-2">
+        <div id="card-part-name" class="text-sm font-black text-white leading-tight mb-2 truncate">Parça Adı</div>
+        <div class="flex items-center justify-between text-xs">
+          <span id="card-part-material" class="px-2.5 py-1 rounded bg-slate-800 text-slate-200 border border-slate-700 font-mono text-xs font-semibold truncate max-w-[170px]">Alüminyum 7075</span>
+          <span id="card-part-tolerance" class="px-3 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono font-bold text-xs">±0.02 mm</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. SAĞ ALT: BÜYÜTÜLMÜŞ MOBİL KUMANDA QR KODU -->
+  <div class="fixed bottom-8 right-8 z-20 flex flex-col items-end gap-3 pointer-events-auto">
+    <div class="glass-panel p-4 rounded-3xl flex items-center gap-4 border border-emerald-500/40 shadow-2xl">
+      <div id="qr-container" class="bg-white p-1.5 rounded-2xl w-[104px] h-[104px] min-w-[104px] min-h-[104px] flex items-center justify-center shadow-md overflow-hidden shrink-0">
+        <div id="qrcode" class="w-24 h-24 flex items-center justify-center"></div>
+      </div>
+      <div class="text-left pr-2">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-400">CANLI MOBİL KUMANDA</span>
+        </div>
+        <div class="text-sm font-bold text-white leading-tight">Telefonunuzla<br>Haritayı Yönetin</div>
+        <div id="remote-status" class="text-[10px] text-slate-400 font-mono mt-1.5">Oturum: Hazırlanıyor...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. KÜRESEL OPERASYON VİTRİNİ -->
+  <div id="global-summary" class="fixed inset-0 z-40 flex items-center justify-center bg-black/85 opacity-0 pointer-events-none transition-all duration-700">
+    <div class="glass-panel p-10 md:p-12 rounded-3xl text-center max-w-3xl border border-emerald-500/40 transform scale-95 transition-transform duration-700 relative overflow-hidden shadow-[0_0_80px_rgba(16,185,129,0.25)]">
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono font-bold tracking-widest uppercase mb-4 shadow-sm">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        ROWND ENDÜSTRİYEL OPERASYON RAPORU
+      </div>
+
+      <h2 class="text-3xl md:text-4xl font-black text-white tracking-tight mb-3">
+        Dünya Çapında Kesintisiz Talaşlı İmalat
+      </h2>
+      <p class="text-slate-400 text-sm max-w-xl mx-auto mb-8 leading-relaxed">
+        Bursa Teknoloji Üssümüzden çıkan yeni nesil Rownd torna tezgahları; havacılık, savunma ve yüksek teknoloji tesislerinin üretim hatlarında mikron hassasiyetle durmaksızın talaş kaldırıyor.
+      </p>
+      
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-5 pt-6 border-t border-slate-800/80">
+        <div class="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+          <div class="text-3xl md:text-4xl font-black text-emerald-400 font-mono tracking-tight">200+</div>
+          <div class="text-xs font-bold text-white mt-1.5">Aktif CNC Torna</div>
+          <div class="text-[11px] text-slate-400 mt-0.5">Endüstriyel Tesislerde</div>
+        </div>
+
+        <div class="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+          <div class="text-3xl md:text-4xl font-black text-sky-400 font-mono tracking-tight">100.000+</div>
+          <div class="text-xs font-bold text-white mt-1.5">Çalışma Saati</div>
+          <div class="text-[11px] text-slate-400 mt-0.5">Talaş İmalatı</div>
+        </div>
+
+        <div class="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
+          <div class="text-3xl md:text-4xl font-black text-teal-300 font-mono tracking-tight">±0.02 mm</div>
+          <div class="text-xs font-bold text-white mt-1.5">Tolerans Güvencesi</div>
+          <div class="text-[11px] text-slate-400 mt-0.5">Mikron Seviye Hassasiyet</div>
+        </div>
+      </div>
+
+      <div class="mt-8 pt-5 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-400 font-mono">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+          <span>Canlı Saha Operasyonları Gösterimi</span>
+        </div>
+        <span class="text-emerald-400 font-bold">Showreel Başlatılıyor ➔</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. SHOWREEL VİDEO KATMANI (SES KONTROLLÜ) -->
+  <div id="video-overlay" class="fixed inset-0 z-50 bg-black opacity-0 pointer-events-none transition-opacity duration-500 flex items-center justify-center">
+    
+    <!-- Video Üst HUD: Sol Başlık + Sağ Ses Açma/Kapama Butonu -->
+    <div class="absolute top-8 left-8 right-8 z-50 flex justify-between items-center pointer-events-none">
+      <div class="glass-panel px-6 py-3 rounded-2xl flex items-center gap-3 pointer-events-auto">
+        <div class="w-3 h-3 bg-red-500 rounded-full animate-ping"></div>
+        <span class="text-xs font-bold tracking-widest text-white uppercase">ROWND PRECISION • SAHA OPERASYONLARI</span>
+      </div>
+
+      <!-- Canlı Ses Butonu -->
+      <button id="video-sound-btn" onclick="toggleVideoAudio()" class="glass-panel px-5 py-3 rounded-2xl flex items-center gap-2 text-xs font-bold text-emerald-400 hover:text-white pointer-events-auto transition-all active:scale-95 shadow-lg">
+        <span id="sound-icon">🔊</span>
+        <span id="sound-label">Ses: Açık</span>
+      </button>
+    </div>
+
+    <!-- Video Etiketi (Muted kaldırıldı, JS akıllı ses kontrolünde) -->
+    <video id="kiosk-video" class="w-full h-full object-cover" playsinline preload="auto">
+      <source src="videos/rownd-machining.mp4" type="video/mp4">
+    </video>
+  </div>
+
+  <!-- 7. SATIŞ BİLDİRİMİ -->
+  <div id="sale-alert" class="fixed inset-0 z-40 flex items-center justify-center bg-black/70 opacity-0 pointer-events-none transition-opacity duration-300">
+    <div class="glass-panel p-8 rounded-3xl text-center max-w-lg border-emerald-500/40 transform scale-90 transition-transform duration-300 shadow-[0_0_50px_rgba(16,185,129,0.3)]">
+      <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 mb-4 animate-bounce">
+        <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+        </svg>
+      </div>
+      <div class="text-xs font-bold tracking-widest text-emerald-400 uppercase mb-1">YENİ TESLİMAT / SATIŞ</div>
+      <h3 id="alert-city" class="text-3xl font-black text-white mb-2">Tokyo, Japonya</h3>
+      <p id="alert-desc" class="text-slate-300 text-sm mb-6">Yeni bir Rownd tezgahı devreye alındı.</p>
+      <div class="text-[11px] font-mono text-slate-400 font-bold">BURSA NİLÜFER ➔ KÜRESEL SEVKİYAT TAMAMLANDI</div>
+    </div>
+  </div>
+
+  <script src="data.js" charset="UTF-8"></script>
+  <script src="app.js" charset="UTF-8"></script>
+</body>
+</html>

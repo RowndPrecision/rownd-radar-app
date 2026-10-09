@@ -1,0 +1,13 @@
+Site adresi : https://rownd-operations.ibrahimay6800.workers.dev/
+
+Admin Paneli : https://rownd-operations.ibrahimay6800.workers.dev/admin 
+
+Şifre: RowndPrecision
+
+Müşteri Paneli : https://rownd-operations.ibrahimay6800.workers.dev/remote
+
+/ 
+
+Raspberry pi 
+Kullanıcı Adı: rownd-radar
+Şifre: 12345
